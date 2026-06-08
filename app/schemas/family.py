@@ -36,6 +36,7 @@ class FamilySpaceCreate(BaseModel):
     description: Optional[str] = ""
     cover_image: Optional[str] = ""
     is_public: Optional[bool] = False
+    creator_id: int
 
 
 class FamilySpaceUpdate(BaseModel):
@@ -43,6 +44,7 @@ class FamilySpaceUpdate(BaseModel):
     description: Optional[str] = None
     cover_image: Optional[str] = None
     is_public: Optional[bool] = None
+    operator_id: int
 
 
 class FamilySpaceOut(BaseModel):
@@ -75,11 +77,13 @@ class FamilyMemberAdd(BaseModel):
     user_id: int
     role: Optional[str] = "visitor"
     nickname: Optional[str] = ""
+    operator_id: int
 
 
 class MemberRoleUpdate(BaseModel):
     role: str
     nickname: Optional[str] = None
+    operator_id: int
 
 
 class InvitationCreate(BaseModel):
@@ -88,6 +92,7 @@ class InvitationCreate(BaseModel):
     invitee_email: Optional[str] = ""
     role: Optional[str] = "visitor"
     message: Optional[str] = ""
+    operator_id: int
 
 
 class InvitationOut(BaseModel):
@@ -110,3 +115,7 @@ class InvitationOut(BaseModel):
 class InvitationAccept(BaseModel):
     code: str
     user_id: int
+
+
+class SpaceActionRequest(BaseModel):
+    operator_id: int

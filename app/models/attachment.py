@@ -64,6 +64,8 @@ class ShareAccessLog(Base):
     visitor_ip = Column(String(50), default="")
     visitor_user_id = Column(Integer, nullable=True)
     access_method = Column(String(20), default="token")
+    access_sequence = Column(Integer, default=0)
     password_attempt = Column(String(10), default="")
     success = Column(String(10), default="yes")
+    fail_reason = Column(String(50), default="")
     created_at = Column(DateTime, default=datetime.utcnow)

@@ -85,7 +85,7 @@ def create_share_link(data: ShareLinkCreate, db: Session = Depends(get_db)):
     if data.expires_hours is not None:
         try:
             hours = int(data.expires_hours)
-            if hours > 0:
+            if hours != 0:
                 expires_at = datetime.utcnow() + timedelta(hours=hours)
         except (ValueError, TypeError):
             pass
@@ -122,38 +122,45 @@ def verify_share_link(data: ShareAccessVerify, db: Session = Depends(get_db)):
     if not link:
         raise HTTPException(status_code=404, detail="分享链接不存在")
 
-    def _log(success: str, password_attempt: str = ""):
+    current_seq = db.query(ShareAccessLog).filter(
+        ShareAccessLog.share_link_id == link.id
+    ).count() + 1
+
+    def _log(success: str, fail_reason: str = "", password_attempt: str = ""):
         db.add(ShareAccessLog(
             share_link_id=link.id,
             visitor_user_id=data.user_id,
             access_method="token",
+            access_sequence=current_seq,
             password_attempt=password_attempt,
             success=success,
+            fail_reason=fail_reason,
         ))
         db.commit()
 
+    if link.max_views > 0 and link.current_views >= link.max_views:
+        if link.is_active == "yes":
+            link.is_active = "no"
+            db.commit()
+        _log("no", "max_views_reached")
+        raise HTTPException(status_code=403, detail="分享链接已达到最大访问次数")
     if link.is_active != "yes":
-        _log("no")
+        _log("no", "link_deactivated")
         raise HTTPException(status_code=403, detail="分享链接已停用")
     if link.expires_at and link.expires_at < datetime.utcnow():
         link.is_active = "no"
         db.commit()
-        _log("no")
+        _log("no", "link_expired")
         raise HTTPException(status_code=403, detail="分享链接已过期")
-    if link.max_views > 0 and link.current_views >= link.max_views:
-        link.is_active = "no"
-        db.commit()
-        _log("no")
-        raise HTTPException(status_code=403, detail="分享链接已达到最大访问次数")
     if link.password and link.password != data.password:
-        _log("no", "wrong")
+        _log("no", "wrong_password", "wrong")
         raise HTTPException(status_code=403, detail="访问密码错误")
 
     link.current_views += 1
     if link.max_views > 0 and link.current_views >= link.max_views:
         link.is_active = "no"
     db.commit()
-    _log("yes", "ok" if link.password else "")
+    _log("yes", "", "ok" if link.password else "")
 
     letter = db.query(Letter).filter(Letter.id == link.letter_id).first()
     if not letter:

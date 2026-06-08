@@ -78,8 +78,10 @@ class ShareAccessLogOut(BaseModel):
     visitor_ip: Optional[str] = ""
     visitor_user_id: Optional[int] = None
     access_method: str
+    access_sequence: int = 0
     password_attempt: Optional[str] = ""
     success: str
+    fail_reason: Optional[str] = ""
     created_at: datetime
 
     model_config = {"from_attributes": True}

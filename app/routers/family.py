@@ -11,12 +11,11 @@ from app.schemas.family import (
     FamilyMemberAdd, FamilyMemberOut, MemberRoleUpdate,
     InvitationCreate, InvitationOut, InvitationAccept,
     UserCreate, UserOut, VALID_ROLES, ROLE_PERMISSIONS,
+    SpaceActionRequest,
 )
 from app.utils.permissions import validate_role, require_permission, update_last_active
 
 router = APIRouter(prefix="/api/family", tags=["家庭空间"])
-
-CURRENT_USER_ID = 1
 
 
 @router.post("/users", response_model=UserOut, summary="注册用户")
@@ -61,14 +60,14 @@ def create_family_space(data: FamilySpaceCreate, db: Session = Depends(get_db)):
         name=data.name,
         description=data.description,
         cover_image=data.cover_image,
-        creator_id=CURRENT_USER_ID,
+        creator_id=data.creator_id,
         is_public=data.is_public,
     )
     db.add(space)
     db.flush()
     member = FamilyMember(
         family_space_id=space.id,
-        user_id=CURRENT_USER_ID,
+        user_id=data.creator_id,
         role="owner",
         nickname="创建者",
         join_source="creator",
@@ -95,23 +94,23 @@ def get_family_space(space_id: int, db: Session = Depends(get_db)):
 
 @router.put("/spaces/{space_id}", response_model=FamilySpaceOut, summary="更新家庭馆信息")
 def update_family_space(space_id: int, data: FamilySpaceUpdate, db: Session = Depends(get_db)):
-    require_permission(db, space_id, CURRENT_USER_ID, "manage_space")
+    require_permission(db, space_id, data.operator_id, "manage_space")
     space = db.query(FamilySpace).filter(FamilySpace.id == space_id).first()
     if not space:
         raise HTTPException(status_code=404, detail="家庭馆不存在")
-    update_data = data.model_dump(exclude_unset=True)
+    update_data = data.model_dump(exclude_unset=True, exclude={"operator_id"})
     for key, value in update_data.items():
         setattr(space, key, value)
     space.updated_at = datetime.utcnow()
-    update_last_active(db, space_id, CURRENT_USER_ID)
+    update_last_active(db, space_id, data.operator_id)
     db.commit()
     db.refresh(space)
     return space
 
 
 @router.delete("/spaces/{space_id}", summary="删除家庭馆")
-def delete_family_space(space_id: int, db: Session = Depends(get_db)):
-    require_permission(db, space_id, CURRENT_USER_ID, "manage_space")
+def delete_family_space(space_id: int, data: SpaceActionRequest, db: Session = Depends(get_db)):
+    require_permission(db, space_id, data.operator_id, "manage_space")
     space = db.query(FamilySpace).filter(FamilySpace.id == space_id).first()
     if not space:
         raise HTTPException(status_code=404, detail="家庭馆不存在")
@@ -127,7 +126,7 @@ def list_members(space_id: int, db: Session = Depends(get_db)):
 
 @router.post("/spaces/{space_id}/members", response_model=FamilyMemberOut, summary="添加家庭成员")
 def add_member(space_id: int, data: FamilyMemberAdd, db: Session = Depends(get_db)):
-    require_permission(db, space_id, CURRENT_USER_ID, "manage_members")
+    require_permission(db, space_id, data.operator_id, "manage_members")
     validate_role(data.role)
     space = db.query(FamilySpace).filter(FamilySpace.id == space_id).first()
     if not space:
@@ -147,7 +146,7 @@ def add_member(space_id: int, data: FamilyMemberAdd, db: Session = Depends(get_d
         last_active_at=datetime.utcnow(),
     )
     db.add(member)
-    update_last_active(db, space_id, CURRENT_USER_ID)
+    update_last_active(db, space_id, data.operator_id)
     db.commit()
     db.refresh(member)
     return member
@@ -155,7 +154,7 @@ def add_member(space_id: int, data: FamilyMemberAdd, db: Session = Depends(get_d
 
 @router.put("/spaces/{space_id}/members/{member_id}", response_model=FamilyMemberOut, summary="更新成员角色")
 def update_member(space_id: int, member_id: int, data: MemberRoleUpdate, db: Session = Depends(get_db)):
-    require_permission(db, space_id, CURRENT_USER_ID, "manage_members")
+    require_permission(db, space_id, data.operator_id, "manage_members")
     validate_role(data.role)
     member = db.query(FamilyMember).filter(
         FamilyMember.id == member_id,
@@ -173,15 +172,15 @@ def update_member(space_id: int, member_id: int, data: MemberRoleUpdate, db: Ses
     member.role = data.role
     if data.nickname is not None:
         member.nickname = data.nickname
-    update_last_active(db, space_id, CURRENT_USER_ID)
+    update_last_active(db, space_id, data.operator_id)
     db.commit()
     db.refresh(member)
     return member
 
 
 @router.delete("/spaces/{space_id}/members/{member_id}", summary="移除家庭成员")
-def remove_member(space_id: int, member_id: int, db: Session = Depends(get_db)):
-    require_permission(db, space_id, CURRENT_USER_ID, "manage_members")
+def remove_member(space_id: int, member_id: int, data: SpaceActionRequest, db: Session = Depends(get_db)):
+    require_permission(db, space_id, data.operator_id, "manage_members")
     member = db.query(FamilyMember).filter(
         FamilyMember.id == member_id,
         FamilyMember.family_space_id == space_id,
@@ -191,14 +190,14 @@ def remove_member(space_id: int, member_id: int, db: Session = Depends(get_db)):
     if member.role == "owner":
         raise HTTPException(status_code=400, detail="不能移除馆主，请先转让馆主角色")
     db.delete(member)
-    update_last_active(db, space_id, CURRENT_USER_ID)
+    update_last_active(db, space_id, data.operator_id)
     db.commit()
     return {"detail": "已移除"}
 
 
 @router.post("/spaces/{space_id}/invitations", response_model=InvitationOut, summary="创建邀请")
 def create_invitation(space_id: int, data: InvitationCreate, db: Session = Depends(get_db)):
-    require_permission(db, space_id, CURRENT_USER_ID, "invite_members")
+    require_permission(db, space_id, data.operator_id, "invite_members")
     validate_role(data.role)
     space = db.query(FamilySpace).filter(FamilySpace.id == space_id).first()
     if not space:
@@ -218,7 +217,7 @@ def create_invitation(space_id: int, data: InvitationCreate, db: Session = Depen
     code = secrets.token_urlsafe(16)
     invitation = FamilyInvitation(
         family_space_id=space_id,
-        inviter_id=CURRENT_USER_ID,
+        inviter_id=data.operator_id,
         invitee_user_id=data.invitee_user_id,
         invitee_phone=data.invitee_phone,
         invitee_email=data.invitee_email,
@@ -229,7 +228,7 @@ def create_invitation(space_id: int, data: InvitationCreate, db: Session = Depen
         expires_at=datetime.utcnow() + timedelta(days=7),
     )
     db.add(invitation)
-    update_last_active(db, space_id, CURRENT_USER_ID)
+    update_last_active(db, space_id, data.operator_id)
     db.commit()
     db.refresh(invitation)
     return invitation

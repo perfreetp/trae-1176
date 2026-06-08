@@ -28,7 +28,10 @@ def _make_snippet(text: str, keyword: str) -> str:
     end = min(len(text), idx + len(keyword) + SNIPPET_RADIUS)
     prefix = "..." if start > 0 else ""
     suffix = "..." if end < len(text) else ""
-    return prefix + text[start:end] + suffix
+    snippet_text = text[start:end]
+    highlight_pattern = re.compile(re.escape(keyword), re.IGNORECASE)
+    snippet_text = highlight_pattern.sub(lambda m: f"**{m.group(0)}**", snippet_text)
+    return prefix + snippet_text + suffix
 
 
 def _collect_hits(letter: Letter, keyword: str, db: Session) -> list:

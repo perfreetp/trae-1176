@@ -3,10 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import os
 
-from app.database import engine, Base
+from app.database import engine, Base, auto_migrate
 from app.routers import family, letter, person, attachment, permission, exhibition, search, export
 
 Base.metadata.create_all(bind=engine)
+auto_migrate()
 
 app = FastAPI(
     title="家书收藏平台 API",

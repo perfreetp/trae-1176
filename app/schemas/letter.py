@@ -17,6 +17,7 @@ class LetterCreate(BaseModel):
     category: Optional[str] = ""
     tags: Optional[str] = ""
     visibility: Optional[str] = "family"
+    operator_id: int
 
 
 class LetterUpdate(BaseModel):
@@ -33,6 +34,7 @@ class LetterUpdate(BaseModel):
     tags: Optional[str] = None
     visibility: Optional[str] = None
     is_starred: Optional[bool] = None
+    operator_id: int
 
 
 class LetterPageCreate(BaseModel):
@@ -40,12 +42,23 @@ class LetterPageCreate(BaseModel):
     image_path: Optional[str] = ""
     transcription: Optional[str] = ""
     notes: Optional[str] = ""
+    operator_id: int
 
 
 class LetterPageUpdate(BaseModel):
     image_path: Optional[str] = None
     transcription: Optional[str] = None
     notes: Optional[str] = None
+    operator_id: int
+
+
+class VisibilityUpdate(BaseModel):
+    visibility: str
+    operator_id: int
+
+
+class LetterActionRequest(BaseModel):
+    operator_id: int
 
 
 class LetterPageOut(BaseModel):
