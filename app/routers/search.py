@@ -1,6 +1,7 @@
+import re
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, and_
+from sqlalchemy import or_
 from typing import Optional
 from collections import defaultdict
 
@@ -10,9 +11,83 @@ from app.models.person import Person, PersonRelation
 from app.models.attachment import Attachment
 from app.models.exhibition import Exhibition, Comment
 from app.models.family import FamilySpace
-from app.schemas.search import SearchQuery, SearchResults, StatOverview, CommunicationRecord, CommunicationGraphOut
+from app.schemas.search import SearchQuery, SearchResults, StatOverview, CommunicationGraphOut
 
 router = APIRouter(prefix="/api/search", tags=["检索统计"])
+
+SNIPPET_RADIUS = 30
+
+
+def _make_snippet(text: str, keyword: str) -> str:
+    if not text or not keyword:
+        return ""
+    idx = text.lower().find(keyword.lower())
+    if idx < 0:
+        return ""
+    start = max(0, idx - SNIPPET_RADIUS)
+    end = min(len(text), idx + len(keyword) + SNIPPET_RADIUS)
+    prefix = "..." if start > 0 else ""
+    suffix = "..." if end < len(text) else ""
+    return prefix + text[start:end] + suffix
+
+
+def _collect_hits(letter: Letter, keyword: str, db: Session) -> list:
+    hits = []
+    if not keyword:
+        return hits
+    field_checks = [
+        ("title", letter.title),
+        ("description", letter.description),
+        ("tags", letter.tags),
+        ("send_location", letter.send_location),
+        ("receive_location", letter.receive_location),
+    ]
+    for field_name, field_val in field_checks:
+        if field_val and keyword.lower() in field_val.lower():
+            hits.append({
+                "field": field_name,
+                "snippet": _make_snippet(field_val, keyword),
+            })
+    pages = db.query(LetterPage).filter(LetterPage.letter_id == letter.id).all()
+    for p in pages:
+        for src_field, src_val in [("transcription", p.transcription), ("notes", p.notes)]:
+            if src_val and keyword.lower() in src_val.lower():
+                hits.append({
+                    "field": f"page_{p.page_number}_{src_field}",
+                    "snippet": _make_snippet(src_val, keyword),
+                })
+    return hits
+
+
+def _build_aggregations(letters: list, db: Session) -> dict:
+    by_era = defaultdict(int)
+    by_person = defaultdict(int)
+    by_tag = defaultdict(int)
+    by_category = defaultdict(int)
+    for l in letters:
+        if l.era:
+            by_era[l.era] += 1
+        if l.category:
+            by_category[l.category] += 1
+        if l.sender_id:
+            sender = db.query(Person).filter(Person.id == l.sender_id).first()
+            if sender:
+                by_person[sender.name] += 1
+        if l.receiver_id:
+            receiver = db.query(Person).filter(Person.id == l.receiver_id).first()
+            if receiver:
+                by_person[receiver.name] += 1
+        if l.tags:
+            for tag in l.tags.split(","):
+                tag = tag.strip()
+                if tag:
+                    by_tag[tag] += 1
+    return {
+        "by_era": dict(sorted(by_era.items(), key=lambda x: -x[1])),
+        "by_category": dict(sorted(by_category.items(), key=lambda x: -x[1])),
+        "by_person": dict(sorted(by_person.items(), key=lambda x: -x[1])),
+        "by_tag": dict(sorted(by_tag.items(), key=lambda x: -x[1])),
+    }
 
 
 @router.post("/letters", response_model=SearchResults, summary="检索信件（关键词+时间）")
@@ -66,8 +141,10 @@ def search_letters(data: SearchQuery, db: Session = Depends(get_db)):
     page_size = min(100, max(1, data.page_size))
     items = base_query.order_by(Letter.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
 
-    return SearchResults(total=total, page=page, page_size=page_size, items=[
-        {
+    result_items = []
+    for l in items:
+        hits = _collect_hits(l, data.keyword, db) if data.keyword else []
+        result_items.append({
             "id": l.id,
             "title": l.title,
             "sender_id": l.sender_id,
@@ -78,9 +155,13 @@ def search_letters(data: SearchQuery, db: Session = Depends(get_db)):
             "visibility": l.visibility,
             "is_starred": l.is_starred,
             "created_at": l.created_at.isoformat() if l.created_at else "",
-        }
-        for l in items
-    ])
+            "hits": hits,
+        })
+
+    all_matched = base_query.all()
+    aggregations = _build_aggregations(all_matched, db) if data.family_space_id else None
+
+    return SearchResults(total=total, page=page, page_size=page_size, items=result_items, aggregations=aggregations)
 
 
 @router.post("/transcriptions", response_model=SearchResults, summary="检索释文内容")
@@ -108,6 +189,11 @@ def search_transcriptions(data: SearchQuery, db: Session = Depends(get_db)):
     items = []
     for p in pages:
         letter = db.query(Letter).filter(Letter.id == p.letter_id).first()
+        hits = []
+        if p.transcription and data.keyword.lower() in p.transcription.lower():
+            hits.append({"field": f"page_{p.page_number}_transcription", "snippet": _make_snippet(p.transcription, data.keyword)})
+        if p.notes and data.keyword.lower() in p.notes.lower():
+            hits.append({"field": f"page_{p.page_number}_notes", "snippet": _make_snippet(p.notes, data.keyword)})
         items.append({
             "page_id": p.id,
             "letter_id": p.letter_id,
@@ -115,6 +201,7 @@ def search_transcriptions(data: SearchQuery, db: Session = Depends(get_db)):
             "page_number": p.page_number,
             "transcription": p.transcription[:200] if p.transcription else "",
             "notes": p.notes[:200] if p.notes else "",
+            "hits": hits,
         })
     return SearchResults(total=total, page=page, page_size=page_size, items=items)
 

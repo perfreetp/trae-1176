@@ -54,3 +54,16 @@ class ShareLink(Base):
     preview_fields = Column(String(500), default="title,send_date,era")
     expires_at = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ShareAccessLog(Base):
+    __tablename__ = "share_access_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    share_link_id = Column(Integer, ForeignKey("share_links.id"), nullable=False)
+    visitor_ip = Column(String(50), default="")
+    visitor_user_id = Column(Integer, nullable=True)
+    access_method = Column(String(20), default="token")
+    password_attempt = Column(String(10), default="")
+    success = Column(String(10), default="yes")
+    created_at = Column(DateTime, default=datetime.utcnow)

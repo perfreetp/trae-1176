@@ -11,10 +11,12 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.letter import Letter, LetterPage
 from app.models.person import Person, PersonRelation
-from app.models.attachment import Attachment
-from app.models.exhibition import Exhibition, ExhibitionItem
+from app.models.attachment import Attachment, ShareLink, ShareAccessLog
 from app.models.family import FamilySpace
-from app.schemas.export import ExportRequest, ExportTaskOut, PreservationManifest, PreservationItem
+from app.schemas.export import (
+    ExportRequest, ExportTaskOut, PreservationManifest, PreservationItem,
+    HandoverSummary, HandoverLetterSummary,
+)
 
 router = APIRouter(prefix="/api/export", tags=["导出交接"])
 
@@ -31,6 +33,58 @@ def _file_checksum(file_path: str) -> str:
             for chunk in iter(lambda: f.read(8192), b""):
                 h.update(chunk)
     return h.hexdigest()
+
+
+def _build_handover(space_id: int, letters: list, db: Session) -> dict:
+    space = db.query(FamilySpace).filter(FamilySpace.id == space_id).first()
+    total_pages = 0
+    total_attachments = 0
+    active_shares = 0
+    total_access = 0
+    letter_summaries = []
+
+    for letter in letters:
+        pages = db.query(LetterPage).filter(LetterPage.letter_id == letter.id).all()
+        total_pages += len(pages)
+
+        attachments = db.query(Attachment).filter(Attachment.letter_id == letter.id).all()
+        total_attachments += len(attachments)
+
+        share_links = db.query(ShareLink).filter(ShareLink.letter_id == letter.id).all()
+        active_count = sum(1 for s in share_links if s.is_active == "yes")
+        active_shares += active_count
+
+        access_count = 0
+        for sl in share_links:
+            access_count += db.query(ShareAccessLog).filter(ShareAccessLog.share_link_id == sl.id).count()
+        total_access += access_count
+
+        content_parts = [letter.title or "", letter.description or ""]
+        for p in pages:
+            content_parts.append(p.transcription or "")
+        content_hash = hashlib.sha256("".join(content_parts).encode("utf-8")).hexdigest()[:16]
+
+        letter_summaries.append(HandoverLetterSummary(
+            id=letter.id,
+            title=letter.title,
+            page_count=len(pages),
+            attachment_count=len(attachments),
+            visibility=letter.visibility,
+            share_link_count=len(share_links),
+            checksum=content_hash,
+        ).model_dump())
+
+    return HandoverSummary(
+        family_space_id=space_id,
+        family_name=space.name if space else "",
+        export_date=datetime.utcnow().isoformat(),
+        total_letters=len(letters),
+        total_pages=total_pages,
+        total_attachments=total_attachments,
+        active_share_links=active_shares,
+        total_share_access=total_access,
+        letters=letter_summaries,
+    ).model_dump()
 
 
 @router.post("/memorial-book", response_model=ExportTaskOut, summary="生成纪念册素材包")
@@ -151,6 +205,10 @@ def export_memorial_book(data: ExportRequest, db: Session = Depends(get_db)):
 
         zf.writestr("metadata.json", json.dumps(metadata, ensure_ascii=False, indent=2))
 
+        if data.include_handover:
+            handover = _build_handover(data.family_space_id, letters, db)
+            zf.writestr("handover.json", json.dumps(handover, ensure_ascii=False, indent=2))
+
     file_size = os.path.getsize(zip_path)
     return ExportTaskOut(
         task_id=task_id,
@@ -159,6 +217,15 @@ def export_memorial_book(data: ExportRequest, db: Session = Depends(get_db)):
         created_at=datetime.utcnow().isoformat(),
         file_size=file_size,
     )
+
+
+@router.get("/handover/{family_space_id}", response_model=HandoverSummary, summary="生成交接清单")
+def get_handover_summary(family_space_id: int, db: Session = Depends(get_db)):
+    space = db.query(FamilySpace).filter(FamilySpace.id == family_space_id).first()
+    if not space:
+        raise HTTPException(status_code=404, detail="家庭馆不存在")
+    letters = db.query(Letter).filter(Letter.family_space_id == family_space_id).all()
+    return _build_handover(family_space_id, letters, db)
 
 
 @router.get("/download/{filename}", summary="下载导出文件")

@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 
@@ -69,3 +69,17 @@ class ShareLinkOut(BaseModel):
 class ShareAccessVerify(BaseModel):
     token: str
     password: Optional[str] = ""
+    user_id: Optional[int] = None
+
+
+class ShareAccessLogOut(BaseModel):
+    id: int
+    share_link_id: int
+    visitor_ip: Optional[str] = ""
+    visitor_user_id: Optional[int] = None
+    access_method: str
+    password_attempt: Optional[str] = ""
+    success: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

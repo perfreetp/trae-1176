@@ -8,6 +8,7 @@ class ExportRequest(BaseModel):
     include_attachments: Optional[bool] = True
     include_transcriptions: Optional[bool] = True
     include_metadata: Optional[bool] = True
+    include_handover: Optional[bool] = True
     letter_ids: Optional[List[int]] = None
     date_from: Optional[str] = ""
     date_to: Optional[str] = ""
@@ -28,6 +29,28 @@ class PreservationManifest(BaseModel):
     export_date: str
     total_items: int
     items: List[PreservationItem]
+
+
+class HandoverLetterSummary(BaseModel):
+    id: int
+    title: str
+    page_count: int
+    attachment_count: int
+    visibility: str
+    share_link_count: int
+    checksum: Optional[str] = ""
+
+
+class HandoverSummary(BaseModel):
+    family_space_id: int
+    family_name: str
+    export_date: str
+    total_letters: int
+    total_pages: int
+    total_attachments: int
+    active_share_links: int
+    total_share_access: int
+    letters: List[HandoverLetterSummary]
 
 
 class ExportTaskOut(BaseModel):

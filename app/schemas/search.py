@@ -19,11 +19,31 @@ class SearchQuery(BaseModel):
     page_size: Optional[int] = 20
 
 
+class HitLocation(BaseModel):
+    field: str
+    snippet: str
+
+
+class SearchItem(BaseModel):
+    id: int
+    title: str
+    sender_id: Optional[int] = None
+    receiver_id: Optional[int] = None
+    send_date: Optional[str] = ""
+    era: Optional[str] = ""
+    category: Optional[str] = ""
+    visibility: str
+    is_starred: bool
+    created_at: str = ""
+    hits: Optional[List[HitLocation]] = []
+
+
 class SearchResults(BaseModel):
     total: int
     page: int
     page_size: int
     items: List[Any]
+    aggregations: Optional[dict] = None
 
 
 class StatOverview(BaseModel):

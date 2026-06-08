@@ -2,6 +2,14 @@ from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 
+VALID_ROLES = ["owner", "admin", "editor", "visitor"]
+ROLE_PERMISSIONS = {
+    "owner": {"manage_space", "manage_members", "invite_members", "manage_letters", "view_content", "manage_exhibitions", "export_data"},
+    "admin": {"invite_members", "manage_members", "manage_letters", "view_content", "manage_exhibitions", "export_data"},
+    "editor": {"manage_letters", "view_content"},
+    "visitor": {"view_content"},
+}
+
 
 class UserCreate(BaseModel):
     username: str
@@ -56,21 +64,29 @@ class FamilyMemberOut(BaseModel):
     user_id: int
     role: str
     nickname: Optional[str] = ""
+    join_source: Optional[str] = "direct"
     joined_at: datetime
+    last_active_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 
 
 class FamilyMemberAdd(BaseModel):
     user_id: int
-    role: Optional[str] = "member"
+    role: Optional[str] = "visitor"
     nickname: Optional[str] = ""
+
+
+class MemberRoleUpdate(BaseModel):
+    role: str
+    nickname: Optional[str] = None
 
 
 class InvitationCreate(BaseModel):
     invitee_user_id: Optional[int] = None
     invitee_phone: Optional[str] = ""
     invitee_email: Optional[str] = ""
+    role: Optional[str] = "visitor"
     message: Optional[str] = ""
 
 
@@ -81,6 +97,7 @@ class InvitationOut(BaseModel):
     invitee_user_id: Optional[int] = None
     invitee_phone: Optional[str] = ""
     invitee_email: Optional[str] = ""
+    role: Optional[str] = "visitor"
     code: str
     status: str
     message: Optional[str] = ""

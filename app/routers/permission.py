@@ -5,11 +5,11 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 
 from app.database import get_db
-from app.models.attachment import LetterAuthorization, ShareLink, Attachment
+from app.models.attachment import LetterAuthorization, ShareLink, ShareAccessLog, Attachment
 from app.models.letter import Letter, LetterPage
 from app.schemas.attachment import (
     AuthorizationCreate, AuthorizationReview, AuthorizationOut,
-    ShareLinkCreate, ShareLinkOut, ShareAccessVerify
+    ShareLinkCreate, ShareLinkOut, ShareAccessVerify, ShareAccessLogOut,
 )
 
 router = APIRouter(prefix="/api/permissions", tags=["权限分享"])
@@ -121,21 +121,39 @@ def verify_share_link(data: ShareAccessVerify, db: Session = Depends(get_db)):
     link = db.query(ShareLink).filter(ShareLink.token == data.token).first()
     if not link:
         raise HTTPException(status_code=404, detail="分享链接不存在")
+
+    def _log(success: str, password_attempt: str = ""):
+        db.add(ShareAccessLog(
+            share_link_id=link.id,
+            visitor_user_id=data.user_id,
+            access_method="token",
+            password_attempt=password_attempt,
+            success=success,
+        ))
+        db.commit()
+
     if link.is_active != "yes":
+        _log("no")
         raise HTTPException(status_code=403, detail="分享链接已停用")
     if link.expires_at and link.expires_at < datetime.utcnow():
         link.is_active = "no"
         db.commit()
+        _log("no")
         raise HTTPException(status_code=403, detail="分享链接已过期")
     if link.max_views > 0 and link.current_views >= link.max_views:
         link.is_active = "no"
         db.commit()
+        _log("no")
         raise HTTPException(status_code=403, detail="分享链接已达到最大访问次数")
     if link.password and link.password != data.password:
+        _log("no", "wrong")
         raise HTTPException(status_code=403, detail="访问密码错误")
 
     link.current_views += 1
+    if link.max_views > 0 and link.current_views >= link.max_views:
+        link.is_active = "no"
     db.commit()
+    _log("yes", "ok" if link.password else "")
 
     letter = db.query(Letter).filter(Letter.id == link.letter_id).first()
     if not letter:
@@ -178,10 +196,7 @@ def verify_share_link(data: ShareAccessVerify, db: Session = Depends(get_db)):
         LetterPage.letter_id == letter.id
     ).order_by(LetterPage.page_number).all()
     letter_data["pages"] = [
-        {
-            "page_number": p.page_number,
-            "transcription": p.transcription,
-        }
+        {"page_number": p.page_number, "transcription": p.transcription}
         for p in pages
     ]
 
@@ -189,20 +204,57 @@ def verify_share_link(data: ShareAccessVerify, db: Session = Depends(get_db)):
         Attachment.letter_id == letter.id
     ).all()
     letter_data["attachments"] = [
-        {
-            "id": a.id,
-            "file_name": a.file_name,
-            "media_type": a.media_type,
-            "file_size": a.file_size,
-        }
+        {"id": a.id, "file_name": a.file_name, "media_type": a.media_type, "file_size": a.file_size}
         for a in attachments
     ]
 
     return {
         "access_level": link.access_level,
         "preview_fields": link.preview_fields,
+        "current_views": link.current_views,
+        "max_views": link.max_views,
         "letter": letter_data,
     }
+
+
+@router.put("/share-links/{link_id}/revoke", response_model=ShareLinkOut, summary="撤销分享链接")
+def revoke_share_link(link_id: int, db: Session = Depends(get_db)):
+    link = db.query(ShareLink).filter(ShareLink.id == link_id).first()
+    if not link:
+        raise HTTPException(status_code=404, detail="分享链接不存在")
+    if link.is_active != "yes":
+        raise HTTPException(status_code=400, detail="分享链接已处于停用状态")
+    link.is_active = "no"
+    db.commit()
+    db.refresh(link)
+    return link
+
+
+@router.put("/share-links/{link_id}/restore", response_model=ShareLinkOut, summary="恢复分享链接")
+def restore_share_link(link_id: int, db: Session = Depends(get_db)):
+    link = db.query(ShareLink).filter(ShareLink.id == link_id).first()
+    if not link:
+        raise HTTPException(status_code=404, detail="分享链接不存在")
+    if link.is_active == "yes":
+        raise HTTPException(status_code=400, detail="分享链接已是活跃状态")
+    if link.expires_at and link.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="分享链接已过期，无法恢复")
+    if link.max_views > 0 and link.current_views >= link.max_views:
+        raise HTTPException(status_code=400, detail="分享链接已达访问上限，无法恢复")
+    link.is_active = "yes"
+    db.commit()
+    db.refresh(link)
+    return link
+
+
+@router.get("/share-links/{link_id}/logs", response_model=List[ShareAccessLogOut], summary="获取分享链接访问记录")
+def list_share_access_logs(link_id: int, skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
+    link = db.query(ShareLink).filter(ShareLink.id == link_id).first()
+    if not link:
+        raise HTTPException(status_code=404, detail="分享链接不存在")
+    return db.query(ShareAccessLog).filter(
+        ShareAccessLog.share_link_id == link_id
+    ).order_by(ShareAccessLog.created_at.desc()).offset(skip).limit(limit).all()
 
 
 @router.delete("/share-links/{link_id}", summary="删除分享链接")
@@ -210,6 +262,7 @@ def delete_share_link(link_id: int, db: Session = Depends(get_db)):
     link = db.query(ShareLink).filter(ShareLink.id == link_id).first()
     if not link:
         raise HTTPException(status_code=404, detail="分享链接不存在")
+    db.query(ShareAccessLog).filter(ShareAccessLog.share_link_id == link_id).delete()
     db.delete(link)
     db.commit()
     return {"detail": "已删除"}
