@@ -4,7 +4,7 @@ from fastapi.staticfiles import StaticFiles
 import os
 
 from app.database import engine, Base, auto_migrate
-from app.routers import family, letter, person, attachment, permission, exhibition, search, export
+from app.routers import family, letter, person, attachment, permission, exhibition, search, export, audit
 
 Base.metadata.create_all(bind=engine)
 auto_migrate()
@@ -35,6 +35,7 @@ app.include_router(permission.router)
 app.include_router(exhibition.router)
 app.include_router(search.router)
 app.include_router(export.router)
+app.include_router(audit.router)
 
 
 @app.get("/", summary="服务状态")

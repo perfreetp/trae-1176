@@ -17,6 +17,7 @@ class LetterCreate(BaseModel):
     category: Optional[str] = ""
     tags: Optional[str] = ""
     visibility: Optional[str] = "family"
+    status: Optional[str] = "draft"
     operator_id: int
 
 
@@ -34,6 +35,7 @@ class LetterUpdate(BaseModel):
     tags: Optional[str] = None
     visibility: Optional[str] = None
     is_starred: Optional[bool] = None
+    status: Optional[str] = None
     operator_id: int
 
 
@@ -58,6 +60,10 @@ class VisibilityUpdate(BaseModel):
 
 
 class LetterActionRequest(BaseModel):
+    operator_id: int
+
+
+class PublishRequest(BaseModel):
     operator_id: int
 
 
@@ -90,6 +96,7 @@ class LetterOut(BaseModel):
     tags: Optional[str] = ""
     visibility: str
     is_starred: bool
+    status: Optional[str] = "draft"
     created_by: int
     created_at: datetime
     updated_at: datetime
@@ -108,6 +115,7 @@ class LetterOutSimple(BaseModel):
     era: Optional[str] = ""
     visibility: str
     is_starred: bool
+    status: Optional[str] = "draft"
     created_at: datetime
 
     model_config = {"from_attributes": True}

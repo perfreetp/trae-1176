@@ -22,6 +22,7 @@ class Letter(Base):
     tags = Column(String(500), default="")
     visibility = Column(String(20), default="family")
     is_starred = Column(Boolean, default=False)
+    status = Column(String(20), default="draft")
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

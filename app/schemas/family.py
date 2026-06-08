@@ -119,3 +119,27 @@ class InvitationAccept(BaseModel):
 
 class SpaceActionRequest(BaseModel):
     operator_id: int
+
+
+class BatchInviteItem(BaseModel):
+    phone: Optional[str] = ""
+    email: Optional[str] = ""
+
+
+class BatchInviteRequest(BaseModel):
+    items: List[BatchInviteItem]
+    role: Optional[str] = "visitor"
+    message: Optional[str] = ""
+    operator_id: int
+
+
+class BatchInviteResultItem(BaseModel):
+    phone: Optional[str] = ""
+    email: Optional[str] = ""
+    status: str
+    detail: str
+    invitation_id: Optional[int] = None
+
+
+class BatchInviteResponse(BaseModel):
+    results: List[BatchInviteResultItem]

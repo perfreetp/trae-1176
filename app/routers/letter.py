@@ -8,9 +8,10 @@ from app.models.person import Person
 from app.schemas.letter import (
     LetterCreate, LetterUpdate, LetterOut, LetterOutSimple,
     LetterPageCreate, LetterPageUpdate, LetterPageOut,
-    VisibilityUpdate, LetterActionRequest,
+    VisibilityUpdate, LetterActionRequest, PublishRequest,
 )
 from app.utils.permissions import require_permission, update_last_active
+from app.utils.audit import audit_create, audit_update, audit_delete, audit_action
 
 router = APIRouter(prefix="/api/letters", tags=["信件档案"])
 
@@ -18,6 +19,12 @@ router = APIRouter(prefix="/api/letters", tags=["信件档案"])
 @router.post("", response_model=LetterOut, summary="创建信件")
 def create_letter(data: LetterCreate, db: Session = Depends(get_db)):
     require_permission(db, data.family_space_id, data.operator_id, "manage_letters")
+    from app.utils.permissions import get_member_role
+    role = get_member_role(db, data.family_space_id, data.operator_id)
+    if data.status == "published" and role not in ("owner", "admin"):
+        letter_status = "draft"
+    else:
+        letter_status = data.status or "draft"
     if data.sender_id:
         sender = db.query(Person).filter(Person.id == data.sender_id).first()
         if not sender:
@@ -44,10 +51,12 @@ def create_letter(data: LetterCreate, db: Session = Depends(get_db)):
         category=data.category,
         tags=data.tags,
         visibility=data.visibility,
+        status=letter_status,
         created_by=data.operator_id,
     )
     db.add(letter)
     update_last_active(db, data.family_space_id, data.operator_id)
+    audit_create(db, data.family_space_id, data.operator_id, "letter", letter.id, after={"title": data.title, "visibility": data.visibility})
     db.commit()
     db.refresh(letter)
     return letter
@@ -56,6 +65,8 @@ def create_letter(data: LetterCreate, db: Session = Depends(get_db)):
 @router.get("", response_model=List[LetterOutSimple], summary="获取信件列表")
 def list_letters(
     family_space_id: Optional[int] = None,
+    status: Optional[str] = None,
+    include_draft: bool = False,
     skip: int = 0,
     limit: int = 20,
     db: Session = Depends(get_db),
@@ -63,6 +74,10 @@ def list_letters(
     query = db.query(Letter)
     if family_space_id:
         query = query.filter(Letter.family_space_id == family_space_id)
+    if status:
+        query = query.filter(Letter.status == status)
+    elif not include_draft:
+        query = query.filter(Letter.status == "published")
     return query.order_by(Letter.created_at.desc()).offset(skip).limit(limit).all()
 
 
@@ -93,11 +108,14 @@ def update_letter(letter_id: int, data: LetterUpdate, db: Session = Depends(get_
         if receiver.family_space_id != letter.family_space_id:
             raise HTTPException(status_code=400, detail="收件人不属于当前家庭馆")
     update_data = data.model_dump(exclude_unset=True, exclude={"operator_id"})
+    before_snapshot = {k: getattr(letter, k) for k in update_data if hasattr(letter, k)}
     for key, value in update_data.items():
         setattr(letter, key, value)
     from datetime import datetime
     letter.updated_at = datetime.utcnow()
     update_last_active(db, letter.family_space_id, data.operator_id)
+    changed_fields = list(update_data.keys())
+    audit_update(db, letter.family_space_id, data.operator_id, "letter", letter.id, before=before_snapshot, after=update_data, detail=f"修改字段: {','.join(changed_fields)}")
     db.commit()
     db.refresh(letter)
     return letter
@@ -110,6 +128,7 @@ def delete_letter(letter_id: int, data: LetterActionRequest, db: Session = Depen
         raise HTTPException(status_code=404, detail="信件不存在")
     require_permission(db, letter.family_space_id, data.operator_id, "manage_letters")
     update_last_active(db, letter.family_space_id, data.operator_id)
+    audit_delete(db, letter.family_space_id, data.operator_id, "letter", letter.id, detail=f"删除信件: {letter.title}")
     db.delete(letter)
     db.commit()
     return {"detail": "已删除"}
@@ -130,6 +149,7 @@ def add_page(letter_id: int, data: LetterPageCreate, db: Session = Depends(get_d
     )
     update_last_active(db, letter.family_space_id, data.operator_id)
     db.add(page)
+    audit_create(db, letter.family_space_id, data.operator_id, "letter_page", page.id, after={"page_number": data.page_number, "transcription": data.transcription[:100]})
     db.commit()
     db.refresh(page)
     return page
@@ -151,6 +171,7 @@ def update_page(letter_id: int, page_id: int, data: LetterPageUpdate, db: Sessio
     letter = db.query(Letter).filter(Letter.id == letter_id).first()
     if letter:
         require_permission(db, letter.family_space_id, data.operator_id, "manage_letters")
+    before_transcription = page.transcription
     update_data = data.model_dump(exclude_unset=True, exclude={"operator_id"})
     for key, value in update_data.items():
         setattr(page, key, value)
@@ -158,6 +179,7 @@ def update_page(letter_id: int, page_id: int, data: LetterPageUpdate, db: Sessio
     page.updated_at = datetime.utcnow()
     if letter:
         update_last_active(db, letter.family_space_id, data.operator_id)
+    audit_update(db, letter.family_space_id if letter else 0, data.operator_id, "letter_page", page.id, before={"transcription": before_transcription}, after={"transcription": page.transcription}, detail=f"更新第{page.page_number}页释文")
     db.commit()
     db.refresh(page)
     return page
@@ -188,10 +210,12 @@ def set_visibility(letter_id: int, data: VisibilityUpdate, db: Session = Depends
     require_permission(db, letter.family_space_id, data.operator_id, "manage_letters")
     if data.visibility not in ("private", "family", "public"):
         raise HTTPException(status_code=400, detail="无效的可见性设置")
+    old_visibility = letter.visibility
     letter.visibility = data.visibility
     from datetime import datetime
     letter.updated_at = datetime.utcnow()
     update_last_active(db, letter.family_space_id, data.operator_id)
+    audit_update(db, letter.family_space_id, data.operator_id, "letter_visibility", letter.id, before={"visibility": old_visibility}, after={"visibility": data.visibility}, detail=f"公开范围从{old_visibility}改为{data.visibility}")
     db.commit()
     db.refresh(letter)
     return letter
@@ -207,6 +231,28 @@ def toggle_star(letter_id: int, data: LetterActionRequest, db: Session = Depends
     from datetime import datetime
     letter.updated_at = datetime.utcnow()
     update_last_active(db, letter.family_space_id, data.operator_id)
+    db.commit()
+    db.refresh(letter)
+    return letter
+
+
+@router.put("/{letter_id}/publish", response_model=LetterOut, summary="发布信件(管理员/馆主)")
+def publish_letter(letter_id: int, data: PublishRequest, db: Session = Depends(get_db)):
+    from app.utils.permissions import get_member_role
+    letter = db.query(Letter).filter(Letter.id == letter_id).first()
+    if not letter:
+        raise HTTPException(status_code=404, detail="信件不存在")
+    role = get_member_role(db, letter.family_space_id, data.operator_id)
+    if role not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="只有馆主或管理员可以发布信件")
+    if letter.status == "published":
+        raise HTTPException(status_code=400, detail="信件已发布")
+    old_status = letter.status
+    letter.status = "published"
+    from datetime import datetime
+    letter.updated_at = datetime.utcnow()
+    update_last_active(db, letter.family_space_id, data.operator_id)
+    audit_update(db, letter.family_space_id, data.operator_id, "letter_status", letter.id, before={"status": old_status}, after={"status": "published"}, detail=f"信件从{old_status}发布为published")
     db.commit()
     db.refresh(letter)
     return letter

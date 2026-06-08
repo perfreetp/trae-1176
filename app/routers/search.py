@@ -138,6 +138,10 @@ def search_letters(data: SearchQuery, db: Session = Depends(get_db)):
         base_query = base_query.filter(Letter.visibility == data.visibility)
     if data.is_starred is not None:
         base_query = base_query.filter(Letter.is_starred == data.is_starred)
+    if data.status:
+        base_query = base_query.filter(Letter.status == data.status)
+    elif not data.include_draft:
+        base_query = base_query.filter(Letter.status == "published")
 
     total = base_query.count()
     page = max(1, data.page)
@@ -157,6 +161,7 @@ def search_letters(data: SearchQuery, db: Session = Depends(get_db)):
             "category": l.category,
             "visibility": l.visibility,
             "is_starred": l.is_starred,
+            "status": l.status,
             "created_at": l.created_at.isoformat() if l.created_at else "",
             "hits": hits,
         })

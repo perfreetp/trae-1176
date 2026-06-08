@@ -11,9 +11,10 @@ from app.schemas.family import (
     FamilyMemberAdd, FamilyMemberOut, MemberRoleUpdate,
     InvitationCreate, InvitationOut, InvitationAccept,
     UserCreate, UserOut, VALID_ROLES, ROLE_PERMISSIONS,
-    SpaceActionRequest,
+    SpaceActionRequest, BatchInviteRequest, BatchInviteResultItem, BatchInviteResponse,
 )
 from app.utils.permissions import validate_role, require_permission, update_last_active
+from app.utils.audit import audit_create, audit_update, audit_delete, audit_action
 
 router = APIRouter(prefix="/api/family", tags=["家庭空间"])
 
@@ -147,6 +148,7 @@ def add_member(space_id: int, data: FamilyMemberAdd, db: Session = Depends(get_d
     )
     db.add(member)
     update_last_active(db, space_id, data.operator_id)
+    audit_create(db, space_id, data.operator_id, "member", member.id, after={"user_id": data.user_id, "role": data.role, "join_source": "direct"})
     db.commit()
     db.refresh(member)
     return member
@@ -169,10 +171,12 @@ def update_member(space_id: int, member_id: int, data: MemberRoleUpdate, db: Ses
         ).count()
         if owner_count <= 1:
             raise HTTPException(status_code=400, detail="家庭馆必须至少保留一位馆主，请先转让馆主")
+    old_role = member.role
     member.role = data.role
     if data.nickname is not None:
         member.nickname = data.nickname
     update_last_active(db, space_id, data.operator_id)
+    audit_update(db, space_id, data.operator_id, "member_role", member.id, before={"role": old_role}, after={"role": data.role}, detail=f"角色从{old_role}改为{data.role}")
     db.commit()
     db.refresh(member)
     return member
@@ -189,6 +193,7 @@ def remove_member(space_id: int, member_id: int, data: SpaceActionRequest, db: S
         raise HTTPException(status_code=404, detail="成员不存在")
     if member.role == "owner":
         raise HTTPException(status_code=400, detail="不能移除馆主，请先转让馆主角色")
+    audit_delete(db, space_id, data.operator_id, "member", member.id, detail=f"移除用户{member.user_id}角色{member.role}")
     db.delete(member)
     update_last_active(db, space_id, data.operator_id)
     db.commit()
@@ -229,14 +234,18 @@ def create_invitation(space_id: int, data: InvitationCreate, db: Session = Depen
     )
     db.add(invitation)
     update_last_active(db, space_id, data.operator_id)
+    audit_action(db, space_id, data.operator_id, "create_invitation", "invitation", invitation.id, detail=f"邀请方式: user={data.invitee_user_id} phone={data.invitee_phone} email={data.invitee_email} role={data.role}")
     db.commit()
     db.refresh(invitation)
     return invitation
 
 
-@router.get("/spaces/{space_id}/invitations", response_model=List[InvitationOut], summary="获取邀请列表")
-def list_invitations(space_id: int, db: Session = Depends(get_db)):
-    return db.query(FamilyInvitation).filter(FamilyInvitation.family_space_id == space_id).all()
+@router.get("/spaces/{space_id}/invitations", response_model=List[InvitationOut], summary="获取邀请列表(支持状态筛选)")
+def list_invitations(space_id: int, status: str = "", db: Session = Depends(get_db)):
+    query = db.query(FamilyInvitation).filter(FamilyInvitation.family_space_id == space_id)
+    if status:
+        query = query.filter(FamilyInvitation.status == status)
+    return query.order_by(FamilyInvitation.created_at.desc()).all()
 
 
 @router.post("/invitations/accept", response_model=InvitationOut, summary="接受邀请")
@@ -290,6 +299,85 @@ def accept_invitation(data: InvitationAccept, db: Session = Depends(get_db)):
         last_active_at=datetime.utcnow(),
     )
     db.add(member)
+    audit_action(db, invitation.family_space_id, data.user_id, "accept_invitation", "invitation", invitation.id, detail=f"接受邀请成为{invitation.role}")
     db.commit()
     db.refresh(invitation)
     return invitation
+
+
+import re
+
+PHONE_RE = re.compile(r"^1[3-9]\d{9}$")
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+@router.post("/spaces/{space_id}/invitations/batch", response_model=BatchInviteResponse, summary="批量邀请")
+def batch_invite(space_id: int, data: BatchInviteRequest, db: Session = Depends(get_db)):
+    require_permission(db, space_id, data.operator_id, "invite_members")
+    validate_role(data.role)
+    space = db.query(FamilySpace).filter(FamilySpace.id == space_id).first()
+    if not space:
+        raise HTTPException(status_code=404, detail="家庭馆不存在")
+
+    results = []
+    for item in data.items:
+        phone = (item.phone or "").strip()
+        email = (item.email or "").strip()
+
+        if not phone and not email:
+            results.append(BatchInviteResultItem(phone=phone, email=email, status="invalid", detail="手机号和邮箱都为空"))
+            continue
+
+        if phone and not PHONE_RE.match(phone):
+            results.append(BatchInviteResultItem(phone=phone, email=email, status="invalid", detail=f"手机号格式不正确: {phone}"))
+            continue
+
+        if email and not EMAIL_RE.match(email):
+            results.append(BatchInviteResultItem(phone=phone, email=email, status="invalid", detail=f"邮箱格式不正确: {email}"))
+            continue
+
+        if phone:
+            existing_user = db.query(User).filter(User.phone == phone).first()
+            if existing_user:
+                already = db.query(FamilyMember).filter(
+                    FamilyMember.family_space_id == space_id,
+                    FamilyMember.user_id == existing_user.id,
+                ).first()
+                if already:
+                    results.append(BatchInviteResultItem(phone=phone, email=email, status="already_member", detail=f"手机号{phone}对应用户已是成员"))
+                    continue
+
+        if email:
+            existing_user = db.query(User).filter(User.email == email).first()
+            if existing_user:
+                already = db.query(FamilyMember).filter(
+                    FamilyMember.family_space_id == space_id,
+                    FamilyMember.user_id == existing_user.id,
+                ).first()
+                if already:
+                    results.append(BatchInviteResultItem(phone=phone, email=email, status="already_member", detail=f"邮箱{email}对应用户已是成员"))
+                    continue
+
+        code = secrets.token_urlsafe(16)
+        invitation = FamilyInvitation(
+            family_space_id=space_id,
+            inviter_id=data.operator_id,
+            invitee_phone=phone,
+            invitee_email=email,
+            role=data.role,
+            code=code,
+            status="pending",
+            message=data.message,
+            expires_at=datetime.utcnow() + timedelta(days=7),
+        )
+        db.add(invitation)
+        db.flush()
+        results.append(BatchInviteResultItem(
+            phone=phone, email=email, status="success",
+            detail="邀请已创建", invitation_id=invitation.id,
+        ))
+        audit_action(db, space_id, data.operator_id, "batch_invite", "invitation", invitation.id, detail=f"批量邀请: phone={phone} email={email}")
+
+    update_last_active(db, space_id, data.operator_id)
+    db.commit()
+    return BatchInviteResponse(results=results)

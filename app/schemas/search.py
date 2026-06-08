@@ -15,6 +15,8 @@ class SearchQuery(BaseModel):
     tags: Optional[str] = ""
     visibility: Optional[str] = ""
     is_starred: Optional[bool] = None
+    status: Optional[str] = ""
+    include_draft: Optional[bool] = False
     page: Optional[int] = 1
     page_size: Optional[int] = 20
 
@@ -34,6 +36,7 @@ class SearchItem(BaseModel):
     category: Optional[str] = ""
     visibility: str
     is_starred: bool
+    status: Optional[str] = "draft"
     created_at: str = ""
     hits: Optional[List[HitLocation]] = []
 
