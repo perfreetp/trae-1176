@@ -2,11 +2,11 @@ import secrets
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 
 from app.database import get_db
-from app.models.attachment import LetterAuthorization, ShareLink
-from app.models.letter import Letter
+from app.models.attachment import LetterAuthorization, ShareLink, Attachment
+from app.models.letter import Letter, LetterPage
 from app.schemas.attachment import (
     AuthorizationCreate, AuthorizationReview, AuthorizationOut,
     ShareLinkCreate, ShareLinkOut, ShareAccessVerify
@@ -81,16 +81,25 @@ def create_share_link(data: ShareLinkCreate, db: Session = Depends(get_db)):
     if not letter:
         raise HTTPException(status_code=404, detail="信件不存在")
     token = secrets.token_urlsafe(24)
-    expires_at = datetime.utcnow() + timedelta(hours=data.expires_hours)
+    expires_at = None
+    if data.expires_hours is not None:
+        try:
+            hours = int(data.expires_hours)
+            if hours > 0:
+                expires_at = datetime.utcnow() + timedelta(hours=hours)
+        except (ValueError, TypeError):
+            pass
+    preview_fields = data.preview_fields or "title,send_date,era"
     link = ShareLink(
         letter_id=data.letter_id,
         creator_id=1,
         token=token,
         access_level=data.access_level,
-        max_views=data.max_views,
+        max_views=data.max_views if data.max_views and data.max_views > 0 else 0,
         current_views=0,
         is_active="yes",
-        password=data.password,
+        password=data.password or "",
+        preview_fields=preview_fields,
         expires_at=expires_at,
     )
     db.add(link)
@@ -124,18 +133,75 @@ def verify_share_link(data: ShareAccessVerify, db: Session = Depends(get_db)):
         raise HTTPException(status_code=403, detail="分享链接已达到最大访问次数")
     if link.password and link.password != data.password:
         raise HTTPException(status_code=403, detail="访问密码错误")
+
     link.current_views += 1
     db.commit()
+
     letter = db.query(Letter).filter(Letter.id == link.letter_id).first()
-    return {
-        "access_level": link.access_level,
-        "letter": {
+    if not letter:
+        return {"access_level": link.access_level, "letter": None}
+
+    allowed_fields = set()
+    if link.preview_fields:
+        allowed_fields = {f.strip() for f in link.preview_fields.split(",") if f.strip()}
+
+    field_map = {
+        "title": ("title", letter.title),
+        "description": ("description", letter.description),
+        "send_date": ("send_date", letter.send_date),
+        "send_location": ("send_location", letter.send_location),
+        "receive_location": ("receive_location", letter.receive_location),
+        "era": ("era", letter.era),
+        "category": ("category", letter.category),
+        "tags": ("tags", letter.tags),
+    }
+
+    if link.access_level == "view" and allowed_fields:
+        letter_data = {"id": letter.id}
+        for field_key, (field_name, field_val) in field_map.items():
+            if field_key in allowed_fields:
+                letter_data[field_name] = field_val
+    else:
+        letter_data = {
             "id": letter.id,
             "title": letter.title,
             "description": letter.description,
             "send_date": letter.send_date,
+            "send_location": letter.send_location,
+            "receive_location": letter.receive_location,
             "era": letter.era,
-        } if letter else None,
+            "category": letter.category,
+            "tags": letter.tags,
+        }
+
+    pages = db.query(LetterPage).filter(
+        LetterPage.letter_id == letter.id
+    ).order_by(LetterPage.page_number).all()
+    letter_data["pages"] = [
+        {
+            "page_number": p.page_number,
+            "transcription": p.transcription,
+        }
+        for p in pages
+    ]
+
+    attachments = db.query(Attachment).filter(
+        Attachment.letter_id == letter.id
+    ).all()
+    letter_data["attachments"] = [
+        {
+            "id": a.id,
+            "file_name": a.file_name,
+            "media_type": a.media_type,
+            "file_size": a.file_size,
+        }
+        for a in attachments
+    ]
+
+    return {
+        "access_level": link.access_level,
+        "preview_fields": link.preview_fields,
+        "letter": letter_data,
     }
 
 

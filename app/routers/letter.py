@@ -4,6 +4,7 @@ from typing import List, Optional
 
 from app.database import get_db
 from app.models.letter import Letter, LetterPage
+from app.models.person import Person
 from app.schemas.letter import (
     LetterCreate, LetterUpdate, LetterOut, LetterOutSimple,
     LetterPageCreate, LetterPageUpdate, LetterPageOut
@@ -14,6 +15,18 @@ router = APIRouter(prefix="/api/letters", tags=["信件档案"])
 
 @router.post("", response_model=LetterOut, summary="创建信件")
 def create_letter(data: LetterCreate, db: Session = Depends(get_db)):
+    if data.sender_id:
+        sender = db.query(Person).filter(Person.id == data.sender_id).first()
+        if not sender:
+            raise HTTPException(status_code=400, detail="寄件人不存在")
+        if sender.family_space_id != data.family_space_id:
+            raise HTTPException(status_code=400, detail="寄件人不属于当前家庭馆")
+    if data.receiver_id:
+        receiver = db.query(Person).filter(Person.id == data.receiver_id).first()
+        if not receiver:
+            raise HTTPException(status_code=400, detail="收件人不存在")
+        if receiver.family_space_id != data.family_space_id:
+            raise HTTPException(status_code=400, detail="收件人不属于当前家庭馆")
     letter = Letter(
         family_space_id=data.family_space_id,
         title=data.title,
@@ -62,6 +75,18 @@ def update_letter(letter_id: int, data: LetterUpdate, db: Session = Depends(get_
     letter = db.query(Letter).filter(Letter.id == letter_id).first()
     if not letter:
         raise HTTPException(status_code=404, detail="信件不存在")
+    if data.sender_id is not None:
+        sender = db.query(Person).filter(Person.id == data.sender_id).first()
+        if not sender:
+            raise HTTPException(status_code=400, detail="寄件人不存在")
+        if sender.family_space_id != letter.family_space_id:
+            raise HTTPException(status_code=400, detail="寄件人不属于当前家庭馆")
+    if data.receiver_id is not None:
+        receiver = db.query(Person).filter(Person.id == data.receiver_id).first()
+        if not receiver:
+            raise HTTPException(status_code=400, detail="收件人不存在")
+        if receiver.family_space_id != letter.family_space_id:
+            raise HTTPException(status_code=400, detail="收件人不属于当前家庭馆")
     update_data = data.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(letter, key, value)

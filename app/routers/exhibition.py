@@ -99,6 +99,8 @@ def add_exhibition_item(exhibition_id: int, data: ExhibitionItemCreate, db: Sess
     letter = db.query(Letter).filter(Letter.id == data.letter_id).first()
     if not letter:
         raise HTTPException(status_code=404, detail="信件不存在")
+    if letter.family_space_id != exhibition.family_space_id:
+        raise HTTPException(status_code=400, detail="信件不属于当前家庭馆，不可跨馆添加展品")
     item = ExhibitionItem(
         exhibition_id=exhibition_id,
         letter_id=data.letter_id,

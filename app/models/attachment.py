@@ -51,5 +51,6 @@ class ShareLink(Base):
     current_views = Column(Integer, default=0)
     is_active = Column(String(10), default="yes")
     password = Column(String(200), default="")
+    preview_fields = Column(String(500), default="title,send_date,era")
     expires_at = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)

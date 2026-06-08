@@ -44,6 +44,7 @@ class FamilyInvitation(Base):
     id = Column(Integer, primary_key=True, index=True)
     family_space_id = Column(Integer, ForeignKey("family_spaces.id"), nullable=False)
     inviter_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    invitee_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     invitee_phone = Column(String(20), default="")
     invitee_email = Column(String(200), default="")
     code = Column(String(50), unique=True, nullable=False)
@@ -54,6 +55,7 @@ class FamilyInvitation(Base):
 
     family_space = relationship("FamilySpace", back_populates="invitations")
     inviter = relationship("User", foreign_keys=[inviter_id])
+    invitee_user = relationship("User", foreign_keys=[invitee_user_id])
 
 
 class User(Base):

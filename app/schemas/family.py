@@ -68,6 +68,7 @@ class FamilyMemberAdd(BaseModel):
 
 
 class InvitationCreate(BaseModel):
+    invitee_user_id: Optional[int] = None
     invitee_phone: Optional[str] = ""
     invitee_email: Optional[str] = ""
     message: Optional[str] = ""
@@ -77,6 +78,7 @@ class InvitationOut(BaseModel):
     id: int
     family_space_id: int
     inviter_id: int
+    invitee_user_id: Optional[int] = None
     invitee_phone: Optional[str] = ""
     invitee_email: Optional[str] = ""
     code: str
@@ -90,3 +92,4 @@ class InvitationOut(BaseModel):
 
 class InvitationAccept(BaseModel):
     code: str
+    user_id: int

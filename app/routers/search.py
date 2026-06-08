@@ -17,45 +17,54 @@ router = APIRouter(prefix="/api/search", tags=["检索统计"])
 
 @router.post("/letters", response_model=SearchResults, summary="检索信件（关键词+时间）")
 def search_letters(data: SearchQuery, db: Session = Depends(get_db)):
-    query = db.query(Letter)
+    base_query = db.query(Letter)
 
     if data.family_space_id:
-        query = query.filter(Letter.family_space_id == data.family_space_id)
+        base_query = base_query.filter(Letter.family_space_id == data.family_space_id)
+
     if data.keyword:
         keyword_filter = f"%{data.keyword}%"
-        query = query.filter(
+        letter_ids_with_transcription = db.query(LetterPage.letter_id).filter(
+            or_(
+                LetterPage.transcription.ilike(keyword_filter),
+                LetterPage.notes.ilike(keyword_filter),
+            )
+        ).subquery()
+        base_query = base_query.filter(
             or_(
                 Letter.title.ilike(keyword_filter),
                 Letter.description.ilike(keyword_filter),
                 Letter.tags.ilike(keyword_filter),
                 Letter.send_location.ilike(keyword_filter),
                 Letter.receive_location.ilike(keyword_filter),
+                Letter.id.in_(letter_ids_with_transcription),
             )
         )
+
     if data.sender_id:
-        query = query.filter(Letter.sender_id == data.sender_id)
+        base_query = base_query.filter(Letter.sender_id == data.sender_id)
     if data.receiver_id:
-        query = query.filter(Letter.receiver_id == data.receiver_id)
+        base_query = base_query.filter(Letter.receiver_id == data.receiver_id)
     if data.era:
-        query = query.filter(Letter.era == data.era)
+        base_query = base_query.filter(Letter.era == data.era)
     if data.date_from:
-        query = query.filter(Letter.send_date >= data.date_from)
+        base_query = base_query.filter(Letter.send_date >= data.date_from)
     if data.date_to:
-        query = query.filter(Letter.send_date <= data.date_to)
+        base_query = base_query.filter(Letter.send_date <= data.date_to)
     if data.category:
-        query = query.filter(Letter.category == data.category)
+        base_query = base_query.filter(Letter.category == data.category)
     if data.tags:
         tags_filter = f"%{data.tags}%"
-        query = query.filter(Letter.tags.ilike(tags_filter))
+        base_query = base_query.filter(Letter.tags.ilike(tags_filter))
     if data.visibility:
-        query = query.filter(Letter.visibility == data.visibility)
+        base_query = base_query.filter(Letter.visibility == data.visibility)
     if data.is_starred is not None:
-        query = query.filter(Letter.is_starred == data.is_starred)
+        base_query = base_query.filter(Letter.is_starred == data.is_starred)
 
-    total = query.count()
+    total = base_query.count()
     page = max(1, data.page)
     page_size = min(100, max(1, data.page_size))
-    items = query.order_by(Letter.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    items = base_query.order_by(Letter.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
 
     return SearchResults(total=total, page=page, page_size=page_size, items=[
         {
@@ -79,12 +88,19 @@ def search_transcriptions(data: SearchQuery, db: Session = Depends(get_db)):
     if not data.keyword:
         return SearchResults(total=0, page=1, page_size=data.page_size, items=[])
     keyword_filter = f"%{data.keyword}%"
-    pages_query = db.query(LetterPage).filter(
+
+    pages_query = db.query(LetterPage).join(
+        Letter, LetterPage.letter_id == Letter.id
+    ).filter(
         or_(
             LetterPage.transcription.ilike(keyword_filter),
             LetterPage.notes.ilike(keyword_filter),
         )
     )
+
+    if data.family_space_id:
+        pages_query = pages_query.filter(Letter.family_space_id == data.family_space_id)
+
     total = pages_query.count()
     page = max(1, data.page)
     page_size = min(100, max(1, data.page_size))

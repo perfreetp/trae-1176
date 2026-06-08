@@ -47,7 +47,8 @@ class ShareLinkCreate(BaseModel):
     access_level: Optional[str] = "view"
     max_views: Optional[int] = 0
     password: Optional[str] = ""
-    expires_hours: Optional[int] = 72
+    expires_hours: Optional[int] = None
+    preview_fields: Optional[str] = "title,send_date,era"
 
 
 class ShareLinkOut(BaseModel):

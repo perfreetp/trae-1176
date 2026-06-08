@@ -18,14 +18,14 @@ router = APIRouter(prefix="/api/family", tags=["家庭空间"])
 
 @router.post("/users", response_model=UserOut, summary="注册用户")
 def create_user(data: UserCreate, db: Session = Depends(get_db)):
-    from passlib.context import CryptContext
-    pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+    import bcrypt
     existing = db.query(User).filter(User.username == data.username).first()
     if existing:
         raise HTTPException(status_code=400, detail="用户名已存在")
+    hashed = bcrypt.hashpw(data.password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
     user = User(
         username=data.username,
-        hashed_password=pwd_ctx.hash(data.password),
+        hashed_password=hashed,
         phone=data.phone,
         email=data.email,
         display_name=data.display_name or data.username,
@@ -167,10 +167,21 @@ def create_invitation(space_id: int, data: InvitationCreate, db: Session = Depen
     space = db.query(FamilySpace).filter(FamilySpace.id == space_id).first()
     if not space:
         raise HTTPException(status_code=404, detail="家庭馆不存在")
+    if data.invitee_user_id:
+        invitee = db.query(User).filter(User.id == data.invitee_user_id).first()
+        if not invitee:
+            raise HTTPException(status_code=404, detail="被邀请用户不存在")
+        already = db.query(FamilyMember).filter(
+            FamilyMember.family_space_id == space_id,
+            FamilyMember.user_id == data.invitee_user_id,
+        ).first()
+        if already:
+            raise HTTPException(status_code=400, detail="该用户已是本馆成员")
     code = secrets.token_urlsafe(16)
     invitation = FamilyInvitation(
         family_space_id=space_id,
         inviter_id=1,
+        invitee_user_id=data.invitee_user_id,
         invitee_phone=data.invitee_phone,
         invitee_email=data.invitee_email,
         code=code,
@@ -191,20 +202,36 @@ def list_invitations(space_id: int, db: Session = Depends(get_db)):
 
 @router.post("/invitations/accept", response_model=InvitationOut, summary="接受邀请")
 def accept_invitation(data: InvitationAccept, db: Session = Depends(get_db)):
+    acceptor = db.query(User).filter(User.id == data.user_id).first()
+    if not acceptor:
+        raise HTTPException(status_code=404, detail="用户不存在")
     invitation = db.query(FamilyInvitation).filter(FamilyInvitation.code == data.code).first()
     if not invitation:
         raise HTTPException(status_code=404, detail="邀请不存在")
     if invitation.status != "pending":
-        raise HTTPException(status_code=400, detail="邀请已处理")
+        raise HTTPException(status_code=400, detail="邀请已处理，不可重复接受")
     if invitation.expires_at and invitation.expires_at < datetime.utcnow():
         invitation.status = "expired"
         db.commit()
         raise HTTPException(status_code=400, detail="邀请已过期")
+    if invitation.invitee_user_id and invitation.invitee_user_id != data.user_id:
+        raise HTTPException(status_code=403, detail="此邀请不适用于当前用户")
+    if invitation.invitee_phone and invitation.invitee_phone != acceptor.phone:
+        if invitation.invitee_email and invitation.invitee_email != acceptor.email:
+            if invitation.invitee_user_id is None:
+                raise HTTPException(status_code=403, detail="手机号或邮箱与邀请不匹配")
+    existing = db.query(FamilyMember).filter(
+        FamilyMember.family_space_id == invitation.family_space_id,
+        FamilyMember.user_id == data.user_id,
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="您已是该家庭馆成员，无需重复加入")
     invitation.status = "accepted"
     member = FamilyMember(
         family_space_id=invitation.family_space_id,
-        user_id=invitation.inviter_id,
+        user_id=data.user_id,
         role="member",
+        nickname=acceptor.display_name or acceptor.username,
     )
     db.add(member)
     db.commit()

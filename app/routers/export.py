@@ -48,6 +48,16 @@ def export_memorial_book(data: ExportRequest, db: Session = Depends(get_db)):
         query = query.filter(Letter.send_date <= data.date_to)
     letters = query.all()
 
+    if data.letter_ids:
+        requested_ids = set(data.letter_ids)
+        found_ids = {l.id for l in letters}
+        mismatch = requested_ids - found_ids
+        if mismatch:
+            raise HTTPException(
+                status_code=400,
+                detail=f"信件 {','.join(str(i) for i in mismatch)} 不属于当前家庭馆或不存在",
+            )
+
     task_id = uuid.uuid4().hex[:12]
     zip_filename = f"memorial_{space.name}_{task_id}.zip"
     zip_path = os.path.join(EXPORT_DIR, zip_filename)
